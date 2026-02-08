@@ -1,6 +1,6 @@
 {
-  "name": "AI Photo Studio",
-  "description": "Generate and edit images using AI on an infinite canvas.",
+  "name": "AI Photo Studio Pro",
+  "description": "Professional-grade image generation and editing with global style requirements and Gemini 3 Pro support.",
   "requestFramePermissions": [],
   "prompt": ""
 }

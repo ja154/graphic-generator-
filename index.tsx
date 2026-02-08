@@ -3,20 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 /* tslint:disable */
-// Copyright 2024 Google LLC
-
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     https://www.apache.org/licenses/LICENSE-2.0
-
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 import {GeneratedImage, GoogleGenAI} from '@google/genai';
 import {useEffect, useRef, useState} from 'react';
 import ReactDOM from 'react-dom/client';
@@ -31,7 +17,6 @@ import {
   TldrawUiButton,
   TldrawUiButtonIcon,
   TldrawUiContextualToolbar,
-  // FIX: Import TLShapeId to correctly type shape IDs.
   TLShapeId,
   TLTextShape,
   toRichText,
@@ -53,16 +38,43 @@ import {
   VIDEO_WIDTH,
 } from './utils';
 
-const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
+// Global state for studio settings
+interface StudioSettings {
+  systemPrompt: string;
+  aspectRatio: "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
+  isProMode: boolean;
+}
 
-const GEMINI_MODEL_NAME = 'gemini-2.5-flash';
-const IMAGEN_MODEL_NAME = 'imagen-4.0-fast-generate-001';
-const GEMINI_IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
+const MASTER_STYLE_PROMPT = `YOU ARE A SPECIALIST IMAGE GENERATOR FOR EDUCATIONAL RESOURCES.
+ADHERE TO THIS MASTER VISUAL STYLE FOR ALL OUTPUTS:
+- Style: Animated, cinematic 3D character illustration. Pixar-inspired but original (NOT Disney/Barbie).
+- Detail: Stylised realism with natural facial asymmetry and unique proportions. NO IDENTICAL FACES.
+- Anatomy: Soft, rounded anatomy. Expressive eyes with natural variation.
+- Texture: Glossy, high-quality materials with subtle skin texture. NO plastic skin.
+- Lighting: Warm, cinematic studio lighting with a storytelling focus.
+- Camera: Shallow depth of field (bokeh).
+
+MANDATORY NEGATIVE CONSTRAINTS - DO NOT PRODUCE:
+- Barbie or doll-like faces, hyper-glam or beauty-filtered appearance.
+- Perfect symmetry, plastic skin, or adult proportions on child characters.
+- Babyish/chibi-style, anime, or low-detail rendering.
+
+INTERPRET USER INPUTS AS TASK-SPECIFIC BRIEFS covering Characters (Age/Ethnicity/Body), Activity, Setting, Clothing, and Facial Expressions. Ensure inclusive, youthful, and age-appropriate content.`;
+
+const DEFAULT_SETTINGS: StudioSettings = {
+  systemPrompt: MASTER_STYLE_PROMPT,
+  aspectRatio: "16:9", // Defaulted to 16:9 as per requirements
+  isProMode: false,
+};
+
+async function getAiClient() {
+  return new GoogleGenAI({apiKey: process.env.API_KEY});
+}
 
 async function describeImage(imageBlob: Blob): Promise<string> {
+  const ai = await getAiClient();
   const imageDataBase64 = await bloblToBase64(imageBlob);
-
-  const textPrompt = `Describe the image`;
+  const textPrompt = `Describe this image in technical photographic terms (lighting, lens, composition).`;
 
   const imagePrompt = {
     inlineData: {
@@ -72,7 +84,7 @@ async function describeImage(imageBlob: Blob): Promise<string> {
   };
 
   const result = await ai.models.generateContent({
-    model: GEMINI_MODEL_NAME,
+    model: 'gemini-2.5-flash',
     contents: {parts: [{text: textPrompt}, imagePrompt]},
   });
   return result.text;
@@ -80,299 +92,179 @@ async function describeImage(imageBlob: Blob): Promise<string> {
 
 async function generateImages(
   prompt: string,
-  imageBlob: Blob = null,
-  numberOfImages = 1,
+  settings: StudioSettings,
+  imageBlob: Blob | null = null,
 ): Promise<string[]> {
-  const imageObjects = [];
+  const ai = await getAiClient();
+  const modelName = settings.isProMode ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+  
+  const imageObjects: string[] = [];
+  const parts: any[] = [{ text: prompt }];
 
   if (imageBlob) {
     const imageDataBase64 = await bloblToBase64(imageBlob);
-    const mimeType =
-      imageDataBase64.match(/data:(.*);base64,/)?.[1] || 'image/jpeg';
-
-    const imagePart = {inlineData: {mimeType, data: imageDataBase64}};
-    const textPart = {text: prompt};
-
-    const res = await ai.models.generateContent({
-      model: GEMINI_IMAGE_MODEL_NAME,
-      contents: {parts: [imagePart, textPart]},
+    parts.unshift({
+      inlineData: {
+        mimeType: 'image/jpeg',
+        data: imageDataBase64
+      }
     });
+  }
 
-    const imagePartRes = res.candidates?.[0]?.content?.parts?.find(
-      (p) => p.inlineData,
-    );
-    if (imagePartRes && imagePartRes.inlineData) {
-      const src = `data:${imagePartRes.inlineData.mimeType};base64,${imagePartRes.inlineData.data}`;
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents: { parts },
+    config: {
+      systemInstruction: settings.systemPrompt,
+      imageConfig: {
+        aspectRatio: settings.aspectRatio,
+        ...(settings.isProMode ? { imageSize: "1K" } : {})
+      }
+    },
+  });
+
+  const candidates = response.candidates?.[0]?.content?.parts || [];
+  for (const part of candidates) {
+    if (part.inlineData) {
+      const src = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       imageObjects.push(src);
-    } else {
-      throw new Error(`No image data found for prompt: ${prompt}`);
     }
-  } else {
-    const response = await ai.models.generateImages({
-      model: IMAGEN_MODEL_NAME,
-      prompt,
-      config: {
-        numberOfImages,
-        aspectRatio: '4:3',
-        outputMimeType: 'image/jpeg',
-      },
-    });
+  }
 
-    if (response?.generatedImages) {
-      response.generatedImages.forEach(
-        (generatedImage: GeneratedImage, index: number) => {
-          if (generatedImage.image?.imageBytes) {
-            const src = `data:image/jpeg;base64,${generatedImage.image.imageBytes}`;
-            imageObjects.push(src);
-          }
-        },
-      );
-    }
+  if (imageObjects.length === 0) {
+    throw new Error("The AI did not return an image. Check your prompt and try again.");
   }
 
   return imageObjects;
 }
 
 const describeClick = async (editor: Editor) => {
-  console.log('describe');
   const shapes = editor.getSelectedShapes();
   shapes
     .filter((shape) => editor.isShapeOfType(shape, 'image'))
     .forEach(async (shape) => {
-      console.log('selected image shape:', shape.id);
-
-      const placeholderIds = addPlaceholder(
-        editor,
-        'Generating description...',
-      );
+      const placeholderIds = addPlaceholder(editor, 'Analyzing Image...');
       editor.select(placeholderIds[0]);
-      editor.zoomToSelectionIfOffscreen(20);
-
-      // Export as PNG blob
+      
       const shapeExport = await editor.toImage([shape.id], {
         format: 'png',
         scale: 1,
         background: true,
       });
 
-      const response = await describeImage(shapeExport.blob);
+      try {
+        const response = await describeImage(shapeExport.blob);
+        editor.deleteShapes(placeholderIds);
 
-      editor.deleteShapes(placeholderIds);
+        const textShapeId = createShapeId();
+        editor.createShape({
+          id: textShapeId,
+          type: 'text',
+          props: {
+            richText: toRichText(response),
+            autoSize: false,
+            w: 400,
+          },
+        });
 
-      const textShapeId = createShapeId();
-      editor.createShape({
-        id: textShapeId,
-        type: 'text',
-        props: {
-          richText: toRichText(response),
-          autoSize: false,
-          w: VIDEO_WIDTH,
-        },
-      });
-
-      const newShape = editor.getShape(textShapeId);
-
-      if (!newShape) return;
-
-      placeNewShape(editor, newShape);
-      createArrowBetweenShapes(editor, shape.id, newShape.id);
+        const newShape = editor.getShape(textShapeId);
+        if (newShape) {
+          placeNewShape(editor, newShape);
+          createArrowBetweenShapes(editor, shape.id, newShape.id);
+        }
+      } catch (e) {
+        editor.deleteShapes(placeholderIds);
+        console.error(e);
+      }
     });
 };
 
-const genImageClick = async (editor: Editor) => {
-  console.log('generate image');
+const genImageClick = async (editor: Editor, settings: StudioSettings) => {
   const shapes = editor.getSelectedShapes();
   const contents: string[] = [];
-  const images = [];
-
-  // FIX: `sourceShapesId` must be of type `TLShapeId[]` to be compatible with `createArrowBetweenShapes`.
+  const images: Blob[] = [];
   const sourceShapesId: TLShapeId[] = [];
 
-  await Promise.all(
-    shapes
-      .filter((shape) => editor.isShapeOfType(shape, 'text'))
-      .map(async (shape) => {
-        console.log('selected text shape:', shape.id);
-        const selectedTextShape = editor.getShape<TLTextShape>(shape.id)!;
-        console.log(selectedTextShape);
-        const textParts = (selectedTextShape.props.richText.content as any[])
-          .filter((p) => p.type === 'paragraph' && p.content?.length > 0)
-          .map((p) => p.content.map((t: any) => t.text).join(''));
-        contents.push(...textParts);
-        sourceShapesId.push(shape.id);
-      }),
-  );
-
-  const imageShapes = shapes.filter((shape) =>
-    editor.isShapeOfType(shape, 'image'),
-  );
-  imageShapes.length = Math.min(1, imageShapes.length); // Max 1 image shape
-
-  await Promise.all(
-    imageShapes.map(async (shape) => {
-      console.log('selected image shape:', shape.id);
-      // Export as PNG blob
-      const shapeExport = await editor.toImage([shape.id], {
-        format: 'png',
-        scale: 1,
-        background: true,
-      });
-      images.push(shapeExport.blob);
+  shapes.forEach((shape) => {
+    if (editor.isShapeOfType(shape, 'text')) {
+      const selectedTextShape = shape as TLTextShape;
+      const text = (selectedTextShape.props.richText.content as any[])
+        .filter((p) => p.type === 'paragraph')
+        .map((p) => p.content.map((t: any) => t.text).join(''))
+        .join('\n');
+      if (text) contents.push(text);
       sourceShapesId.push(shape.id);
-    }),
-  );
-
-  console.log(contents, images);
-  if (contents.length === 0 && images.length === 0) return;
-
-  const placeholderIds = addPlaceholder(editor, 'Generating image...');
-  editor.select(placeholderIds[0]);
-  editor.zoomToSelectionIfOffscreen(20);
-
-  const promptText = contents.join('\n');
-  const image = images.length > 0 ? images[0] : null;
-
-  console.log('generating...', contents);
-  let imageObjects = [];
-  try {
-    imageObjects = await generateImages(promptText, image);
-  } catch (e) {
-    editor.select(placeholderIds[0]);
-    editor.deleteShapes(placeholderIds);
-    throw new Error(e.message);
-  }
-  console.log('done.');
-
-  editor.select(placeholderIds[0]);
-
-  let bounds = editor.getSelectionPageBounds();
-
-  const x = bounds.left;
-  const y = bounds.top;
-  const w = bounds.width;
-  const h = bounds.height;
-
-  editor.deleteShapes(placeholderIds);
-
-  let lastId: TLShapeId = null;
-
-  imageObjects.forEach((imgSrc, i) => {
-    const assetId = AssetRecordType.createId();
-
-    editor.createAssets([
-      {
-        id: assetId,
-        type: 'image',
-        typeName: 'asset',
-        props: {
-          name: `sample_${i}_${assetId}.jpg`,
-          src: imgSrc,
-          w: VIDEO_WIDTH,
-          h: VIDEO_HEIGHT,
-          mimeType: 'image/jpeg',
-          isAnimated: false,
-        },
-        meta: {},
-      },
-    ]);
-
-    lastId = createShapeId();
-    editor.createShape({
-      id: lastId,
-      type: 'image',
-      x: x + i * 30,
-      y: y + i * 30,
-      props: {
-        assetId,
-        w,
-        h,
-      },
-    });
-
-    sourceShapesId.forEach((shapeId) => {
-      createArrowBetweenShapes(editor, shapeId, lastId);
-    });
+    }
   });
 
-  if (lastId) {
-    editor.select(lastId);
-    editor.zoomToSelection({animation: {duration: 400}});
+  const imageShapes = shapes.filter((shape) => editor.isShapeOfType(shape, 'image'));
+  if (imageShapes.length > 0) {
+    const shape = imageShapes[0];
+    const shapeExport = await editor.toImage([shape.id], {
+      format: 'png',
+      scale: 1,
+      background: true,
+    });
+    images.push(shapeExport.blob);
+    sourceShapesId.push(shape.id);
   }
-};
 
-const generateNewImage = async (
-  editor: Editor,
-  prompt: string,
-  imgSrc: string,
-) => {
-  console.log('generateNewImage', prompt, imgSrc);
+  if (contents.length === 0 && images.length === 0) return;
 
-  const textShapeId = createShapeId();
-  const imgShapeId = createShapeId();
-  // FIX: Only select shapes that have been created.
-  const idsToSelect: TLShapeId[] = [];
+  const placeholderIds = addPlaceholder(editor, settings.isProMode ? 'Master Style Rendering (Pro)...' : 'Generating Resource...');
+  editor.select(placeholderIds[0]);
 
-  // add image to canvas
-  if (imgSrc) {
-    const assetId = AssetRecordType.createId();
+  try {
+    const promptText = contents.join('\n') || "Educational resource illustration";
+    const imageObjects = await generateImages(promptText, settings, images[0] || null);
+    
+    editor.deleteShapes(placeholderIds);
+    let lastId: TLShapeId | null = null;
 
-    editor.createAssets([
-      {
+    imageObjects.forEach((imgSrc, i) => {
+      const assetId = AssetRecordType.createId();
+      editor.createAssets([{
         id: assetId,
         type: 'image',
         typeName: 'asset',
         props: {
-          name: `uploaded_image_${assetId}.jpg`,
+          name: `educational_resource_${Date.now()}.jpg`,
           src: imgSrc,
-          w: VIDEO_WIDTH,
-          h: VIDEO_HEIGHT,
+          w: settings.aspectRatio.includes('16:9') ? VIDEO_WIDTH : VIDEO_HEIGHT,
+          h: settings.aspectRatio.includes('16:9') ? VIDEO_HEIGHT : VIDEO_WIDTH,
           mimeType: 'image/jpeg',
           isAnimated: false,
         },
         meta: {},
-      },
-    ]);
+      }]);
 
-    editor.createShape({
-      id: imgShapeId,
-      type: 'image',
-      props: {
-        assetId,
-      },
+      lastId = createShapeId();
+      editor.createShape({
+        id: lastId,
+        type: 'image',
+        props: { 
+          assetId, 
+          w: settings.aspectRatio.includes('16:9') ? VIDEO_WIDTH : VIDEO_HEIGHT, 
+          h: settings.aspectRatio.includes('16:9') ? VIDEO_HEIGHT : VIDEO_WIDTH 
+        },
+      });
+
+      const newShape = editor.getShape(lastId);
+      if (newShape) {
+        placeNewShape(editor, newShape);
+        sourceShapesId.forEach(sid => createArrowBetweenShapes(editor, sid, lastId!));
+      }
     });
 
-    const imgShape = editor.getShape(imgShapeId);
-    placeNewShape(editor, imgShape!);
-    idsToSelect.push(imgShapeId);
+    if (lastId) {
+      editor.select(lastId);
+      editor.zoomToSelection({animation: {duration: 400}});
+    }
+  } catch (e: any) {
+    editor.deleteShapes(placeholderIds);
+    throw e;
   }
-
-  // add text to canvas
-  if (prompt) {
-    editor.createShape({
-      id: textShapeId,
-      type: 'text',
-      props: {
-        richText: toRichText(prompt),
-        autoSize: true,
-      },
-    });
-
-    const textShape = editor.getShape(textShapeId);
-    placeNewShape(editor, textShape!);
-    idsToSelect.push(textShapeId);
-  }
-
-  // select
-  if (idsToSelect.length > 0) {
-    editor.select(...idsToSelect);
-    editor.zoomToSelection({animation: {duration: 400}});
-  }
-
-  // generate
-  await genImageClick(editor);
 };
-
-// ---
 
 const assetUrls: TldrawProps['assetUrls'] = {
   icons: {
@@ -381,9 +273,10 @@ const assetUrls: TldrawProps['assetUrls'] = {
   },
 };
 
-const OverlayComponent = track(() => {
+const OverlayComponent = track(({ settings, onSettingsChange }: { settings: StudioSettings, onSettingsChange: (s: StudioSettings) => void }) => {
   const editor = useEditor();
   const {addToast} = useToasts();
+
   return (
     <div
       style={{
@@ -395,13 +288,50 @@ const OverlayComponent = track(() => {
         pointerEvents: 'none',
       }}
       onPointerDown={stopEventPropagation}>
-      <ContextualToolbarComponent />
+      <ContextualToolbarComponent settings={settings} />
       <PromptBar
+        settings={settings}
+        onSettingsChange={onSettingsChange}
         onSubmit={async (prompt, image) => {
           try {
-            await generateNewImage(editor, prompt, image);
-          } catch (e) {
-            addToast({title: e.message, severity: 'error'});
+            const idsToSelect: TLShapeId[] = [];
+            if (image) {
+              const assetId = AssetRecordType.createId();
+              editor.createAssets([{
+                id: assetId,
+                type: 'image',
+                typeName: 'asset',
+                props: { 
+                  src: image, 
+                  w: VIDEO_WIDTH, 
+                  h: VIDEO_HEIGHT, 
+                  mimeType: 'image/jpeg', 
+                  name: 'input.jpg',
+                  isAnimated: false
+                },
+                meta: {},
+              }]);
+              const id = createShapeId();
+              editor.createShape({ id, type: 'image', props: { assetId } });
+              placeNewShape(editor, editor.getShape(id)!);
+              idsToSelect.push(id);
+            }
+            if (prompt) {
+              const id = createShapeId();
+              editor.createShape({ id, type: 'text', props: { richText: toRichText(prompt) } });
+              placeNewShape(editor, editor.getShape(id)!);
+              idsToSelect.push(id);
+            }
+            if (idsToSelect.length > 0) {
+              editor.select(...idsToSelect);
+              await genImageClick(editor, settings);
+            }
+          } catch (e: any) {
+            if (e.message?.includes("Requested entity was not found")) {
+              addToast({ title: "Pro Mode error: Please re-select your API key.", severity: "warning" });
+            } else {
+              addToast({title: e.message, severity: 'error'});
+            }
           }
         }}
       />
@@ -409,11 +339,9 @@ const OverlayComponent = track(() => {
   );
 });
 
-const ContextualToolbarComponent = track(() => {
+const ContextualToolbarComponent = track(({ settings }: { settings: StudioSettings }) => {
   const editor = useEditor();
-  const {addToast} = useToasts();
   const showToolbar = editor.isIn('select.idle');
-
   const ref = useRef<HTMLDivElement>(null);
   usePassThroughWheelEvents(ref);
 
@@ -422,78 +350,29 @@ const ContextualToolbarComponent = track(() => {
   const getSelectionBounds = () => {
     const fullBounds = editor.getSelectionRotatedScreenBounds();
     if (!fullBounds) return undefined;
-    const box = new Box(
-      fullBounds.x,
-      fullBounds.y + fullBounds.height + 75,
-      fullBounds.width,
-      0,
-    );
-    return box;
+    return new Box(fullBounds.x, fullBounds.y + fullBounds.height + 75, fullBounds.width, 0);
   };
 
   const shapes = editor.getSelectedShapes();
-  const textShapes = shapes.filter((shape) =>
-    editor.isShapeOfType(shape, 'text'),
-  );
-  const imageShapes = shapes.filter((shape) =>
-    editor.isShapeOfType(shape, 'image'),
-  );
-  const otherShapes = shapes.filter(
-    (shape) =>
-      !editor.isShapeOfType(shape, 'image') &&
-      !editor.isShapeOfType(shape, 'text'),
-  );
+  const textShapes = shapes.filter(s => editor.isShapeOfType(s, 'text'));
+  const imageShapes = shapes.filter(s => editor.isShapeOfType(s, 'image'));
+  const otherShapes = shapes.filter(s => !editor.isShapeOfType(s, 'image') && !editor.isShapeOfType(s, 'text'));
 
-  const hasImage = imageShapes.length > 0;
-  const hasText = textShapes.length > 0;
-  const hasOtherShapes = otherShapes.length > 0;
-
-  if (hasOtherShapes || (textShapes.length === 0 && imageShapes.length === 0))
-    return;
+  if (otherShapes.length > 0 || (textShapes.length === 0 && imageShapes.length === 0)) return null;
 
   const actions = [];
-
-  if (hasImage && !hasText) {
-    actions.push({
-      label: 'Describe',
-      title: 'Describe image',
-      icon: 'genai-describe-image',
-      onClick: () => describeClick(editor),
-    });
+  if (imageShapes.length > 0 && textShapes.length === 0) {
+    actions.push({ label: 'Analyze', title: 'Analyze image', icon: 'genai-describe-image', onClick: () => describeClick(editor) });
   }
-  if (hasText && !hasImage) {
-    actions.push({
-      label: 'Generate image',
-      title: 'Generate image from text',
-      icon: 'genai-generate-image',
-      onClick: () => genImageClick(editor),
-    });
-  }
-  if (hasText && hasImage) {
-    actions.push({
-      label: 'Generate image',
-      title: 'Generate image from image and text',
-      icon: 'genai-generate-image',
-      onClick: () => genImageClick(editor),
-    });
-  }
-
-  if (hasOtherShapes) actions.length = 0;
+  actions.push({ label: 'Studio Gen', title: 'Generate Master Style', icon: 'genai-generate-image', onClick: () => genImageClick(editor, settings) });
 
   return (
-    // FIX: The `ref` prop is not supported on TldrawUiContextualToolbar. It should be on the child div.
-    <TldrawUiContextualToolbar
-      getSelectionBounds={getSelectionBounds}
-      label="GenAI">
+    <TldrawUiContextualToolbar getSelectionBounds={getSelectionBounds} label="Studio Tools">
       <div className="genai-actions-context" ref={ref}>
-        {actions?.map(({label, title, icon, onClick}, i) => (
-          <TldrawUiButton
-            key={`${i}`}
-            title={title}
-            type="icon"
-            onClick={onClick}>
-            <TldrawUiButtonIcon small icon={icon} />
-            {label}
+        {actions.map((a, i) => (
+          <TldrawUiButton key={i} title={a.title} type="icon" onClick={a.onClick}>
+            <TldrawUiButtonIcon small icon={a.icon} />
+            {a.label}
           </TldrawUiButton>
         ))}
       </div>
@@ -501,48 +380,42 @@ const ContextualToolbarComponent = track(() => {
   );
 });
 
-// ---
-
 export default function App() {
-  const [editor, setEditor] = useState<Editor | null>(null);
   const [showGettingStarted, setShowGettingStarted] = useState(false);
+  const [settings, setSettings] = useState<StudioSettings>(() => {
+    const saved = localStorage.getItem('studio_settings_v2');
+    return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+  });
 
   useEffect(() => {
-    // A more specific key to avoid conflicts with other starter apps
+    localStorage.setItem('studio_settings_v2', JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
     const hasVisited = localStorage.getItem('hasVisitedGenAICanvas');
-    if (!hasVisited) {
-      setShowGettingStarted(true);
-    }
+    if (!hasVisited) setShowGettingStarted(true);
   }, []);
 
-  const handleCloseGettingStarted = () => {
-    localStorage.setItem('hasVisitedGenAICanvas', 'true');
-    setShowGettingStarted(false);
-  };
-
   return (
-    <>
-      {showGettingStarted && (
-        <GettingStarted onClose={handleCloseGettingStarted} />
-      )}
+    <div className="app">
+      {showGettingStarted && <GettingStarted onClose={() => {
+        localStorage.setItem('hasVisitedGenAICanvas', 'true');
+        setShowGettingStarted(false);
+      }} />}
       <NoticeBanner />
       <Tldraw
         inferDarkMode
         components={{
-          InFrontOfTheCanvas: OverlayComponent,
+          InFrontOfTheCanvas: () => <OverlayComponent settings={settings} onSettingsChange={setSettings} />,
         }}
         assetUrls={assetUrls}
         onMount={(editor) => {
-          setEditor(editor);
-          editor.user.updateUserPreferences({
-            animationSpeed: 1,
-          });
-          editor.zoomToFit();
+          editor.user.updateUserPreferences({ animationSpeed: 1 });
         }}
       />
-    </>
+    </div>
   );
 }
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
+const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(<App />);
