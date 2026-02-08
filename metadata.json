@@ -1,0 +1,6 @@
+{
+  "name": "AI Photo Studio",
+  "description": "Generate and edit images using AI on an infinite canvas.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
