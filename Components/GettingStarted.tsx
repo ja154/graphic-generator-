@@ -28,14 +28,9 @@ export function GettingStarted({onClose}: GettingStartedProps) {
           <p className="getting-started-description">
             Generate and edit images on an infinite canvas. Combine text and image inputs to create something new.
           </p>
-          <video
-            src="https://www.gstatic.com/aistudio/zero-state/media_sim_instructions.mp4"
-            width="100%"
-            controls
-            playsInline
-            loop
-            aria-label="Instructions video"
-          />
+          <p className="getting-started-description">
+            Use the "Master Style Guidelines" in settings to adhere to specific educational resource requirements.
+          </p>
         </main>
       </div>
     </div>
