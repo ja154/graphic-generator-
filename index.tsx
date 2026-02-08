@@ -63,9 +63,21 @@ INTERPRET USER INPUTS AS TASK-SPECIFIC BRIEFS covering Characters (Age/Ethnicity
 
 const DEFAULT_SETTINGS: StudioSettings = {
   systemPrompt: MASTER_STYLE_PROMPT,
-  aspectRatio: "16:9", // Defaulted to 16:9 as per requirements
+  aspectRatio: "16:9",
   isProMode: false,
 };
+
+function getDimensionsFromRatio(ratio: string): { w: number, h: number } {
+  switch (ratio) {
+    case "1:1": return { w: 512, h: 512 };
+    case "4:3": return { w: 640, h: 480 };
+    case "3:4": return { w: 480, h: 640 };
+    case "9:16": return { w: 360, h: 640 };
+    case "16:9": 
+    default:
+      return { w: 640, h: 360 };
+  }
+}
 
 async function getAiClient() {
   return new GoogleGenAI({apiKey: process.env.API_KEY});
@@ -220,6 +232,7 @@ const genImageClick = async (editor: Editor, settings: StudioSettings) => {
     
     editor.deleteShapes(placeholderIds);
     let lastId: TLShapeId | null = null;
+    const { w, h } = getDimensionsFromRatio(settings.aspectRatio);
 
     imageObjects.forEach((imgSrc, i) => {
       const assetId = AssetRecordType.createId();
@@ -230,8 +243,8 @@ const genImageClick = async (editor: Editor, settings: StudioSettings) => {
         props: {
           name: `educational_resource_${Date.now()}.jpg`,
           src: imgSrc,
-          w: settings.aspectRatio.includes('16:9') ? VIDEO_WIDTH : VIDEO_HEIGHT,
-          h: settings.aspectRatio.includes('16:9') ? VIDEO_HEIGHT : VIDEO_WIDTH,
+          w: w,
+          h: h,
           mimeType: 'image/jpeg',
           isAnimated: false,
         },
@@ -244,8 +257,8 @@ const genImageClick = async (editor: Editor, settings: StudioSettings) => {
         type: 'image',
         props: { 
           assetId, 
-          w: settings.aspectRatio.includes('16:9') ? VIDEO_WIDTH : VIDEO_HEIGHT, 
-          h: settings.aspectRatio.includes('16:9') ? VIDEO_HEIGHT : VIDEO_WIDTH 
+          w: w, 
+          h: h 
         },
       });
 
